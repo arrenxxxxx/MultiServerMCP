@@ -1,0 +1,38 @@
+{
+    "name": "MultiServerMCP",
+    "version": "1.0.0",
+    "description": "支持多连接的MCP服务器框架",
+    "type": "module",
+    "main": "dist/index.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "node --inspect dist/src/cli.js",
+        "dev": "node --loader ts-node/esm src/cli.ts",
+        "server": "node --inspect --loader ts-node/esm src/server.ts",
+        "dev:pretty": "node --loader ts-node/esm src/cli.ts | pino-pretty",
+        "server:pretty": "node --inspect --loader ts-node/esm src/server.ts | pino-pretty"
+    },
+    "dependencies": {
+        "@langchain/core": "^0.3.42",
+        "@langchain/langgraph": "^0.2.54",
+        "@langchain/openai": "^0.0.15",
+        "@modelcontextprotocol/sdk": "^1.8.0",
+        "@types/uuid": "^10.0.0",
+        "axios": "^1.6.0",
+        "cors": "^2.8.5",
+        "dotenv": "^16.3.1",
+        "express": "^4.18.2",
+        "pino": "^8.16.2",
+        "pino-pretty": "^13.0.0",
+        "uuid": "^11.1.0",
+        "zod": "^3.22.4",
+        "zod-to-json-schema": "^3.24.5"
+    },
+    "devDependencies": {
+        "@types/cors": "^2.8.17",
+        "@types/express": "^4.17.21",
+        "@types/node": "^20.10.0",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.8.2"
+    }
+}
