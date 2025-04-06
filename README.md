@@ -1,34 +1,96 @@
 # MultiServerMCP
 
-支持多连接的MCP服务器框架，基于SSE实现长连接通信。
+A multi-connection MCP server framework based on SSE for long-connection communication. Provides context and functional extension capabilities for AI assistants.
+Currently only supports SSE mode.
 
-## 主要特性
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![English](https://img.shields.io/badge/Language-English-blue)](README.md)
+[![中文简体](https://img.shields.io/badge/Language-简体中文-red)](README_zh.md)
 
-- 支持SSE模式下多个客户端连接到服务器
-- 按URL分组管理工具
-- 内置心跳机制，确保连接稳定性
-- 简化工具注册流程，开发者只需关注工具实现
+🚀 MultiServerMCP — Enable AI assistants with extended capabilities through multi-connection server framework!
 
-## 快速开始
+MultiServerMCP is designed to provide a robust server framework that supports multiple client connections to a single server, allowing for efficient tool and permission management for AI assistants.
 
-### 安装依赖
+## 🌟 Main Features
 
-```bash
-pnpm install
-```
+- Support for multiple client connections to a single server in SSE mode
+- Tool and permission management by URL grouping
+- Built-in heartbeat mechanism to ensure connection stability
+- Simplified tool registration process
+- Full compatibility with MCP protocol
 
-### 启动服务器
-
-```bash
-pnpm run server
-```
-
-或使用美化日志输出：
+## 📦 Installation
 
 ```bash
-pnpm run server:pretty
+npm install multi-server-mcp
+# or
+yarn add multi-server-mcp
+# or
+pnpm add multi-server-mcp
 ```
 
-## 开发指南
+## 🚀 Quick Start
 
-工具开发者只需要将自定义工具注册到服务器即可，无需关心底层请求处理细节。
+### Basic Usage
+
+```typescript
+import { MultiServerMCP } from 'multi-server-mcp';
+
+// Create MCP server instance
+const server = new MultiServerMCP({
+  name: 'my-mcp-server',
+  version: '1.0.0'
+});
+
+// Register a tool
+server.tool('my-tool', async () => {
+  return {
+    content: [{ type: 'text', text: 'Tool executed successfully!' }]
+  };
+});
+
+// Start the server
+server.start({
+  transportType: 'sse',
+  sse: {
+    port: 3000,
+    endpoint: '/mcp',
+    messagesEndpoint: '/mcp-messages'
+  }
+});
+```
+
+### Tool Grouping and Permission Management
+
+```typescript
+// Register a tool with grouping
+server.tool('group1/group2/my-tool', async () => {
+  return {
+    content: [{ type: 'text', text: 'Tool executed successfully!' }]
+  };
+});
+
+// Start server with permission management
+server.start({
+  transportType: 'sse',
+  enableUrlGroups: true
+});
+```
+
+## 🔧 Development Guide
+
+Currently only SSE mode is supported.
+
+### Supported Tool Types
+
+- Regular tools: `server.tool()`
+- Resource tools: `server.resource()`
+- Prompt tools: `server.prompt()`
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome!
+
+## 📄 License
+
+[MIT](LICENSE)

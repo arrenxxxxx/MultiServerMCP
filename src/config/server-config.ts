@@ -23,18 +23,15 @@ function formatPath(path: string): string {
  * 应用配置
  */
 export const config = {
-  // MCP服务器配置
   mcp: {
-    // 服务器名称
     serverName: process.env.MCP_SERVER_NAME || 'MultiServerMCP',
-    // 服务器版本
     serverVersion: process.env.MCP_SERVER_VERSION || '1.0.0',
-    // 服务器连接地址
     serverPort: process.env.MCP_SERVER_PORT || '3001',
-    // SSE端点
     sseEndpoint: formatPath(process.env.MCP_SSE_ENDPOINT || '/sse'),
-    // 消息端点
     messagesEndpoint: formatPath(process.env.MCP_MESSAGES_ENDPOINT || '/message'),
-  }
+  },
+  log: {
+    level: process.env.LOG_LEVEL || 'info',
+  },
 
 }; 
