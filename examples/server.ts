@@ -1,13 +1,43 @@
+import { z } from "zod";
 import { log } from "../src/component/logger.js";
 import { MultiServerMCP } from "../src/server/mcp.js";
+import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { getSseReqQuery } from "../src/index.js";
 
-// 创建MCP服务器
-const server = new MultiServerMCP({
-  name: "multi server",
-  version: "1.0.0",
+// create mcp server
+const server = new MultiServerMCP(
+  {
+    name: "multi server",
+    version: "1.0.0",
+  },
+  {
+    enableUrlGroups: true,
+  }
+);
+
+server.tool("calc/add", { a: z.number(), b: z.number() }, async ({ a, b }, extra) => {
+  console.log(extra);
+  const reqQuery = getSseReqQuery(extra.sessionId as string);
+  console.log(reqQuery);
+  return {
+    content: [{ type: "text", text: String(a + b) }],
+  };
 });
 
-// 启动服务器
+server.resource(
+  "greeting",
+  new ResourceTemplate("greeting://{name}", { list: undefined }),
+  async (uri, { name }) => ({
+    contents: [
+      {
+        uri: uri.href,
+        text: `Hello, ${name}!`,
+      },
+    ],
+  })
+);
+
+// start server
 server
   .start({
     transportType: "sse",

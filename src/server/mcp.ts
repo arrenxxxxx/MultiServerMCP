@@ -1,3 +1,4 @@
+import { ServerOptions } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   McpServer,
   PromptCallback,
@@ -14,6 +15,7 @@ import {
   ErrorCode,
   GetPromptRequestSchema,
   GetPromptResult,
+  Implementation,
   ListPromptsRequestSchema,
   ListPromptsResult,
   ListResourcesRequestSchema,
@@ -41,8 +43,9 @@ import {
 } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { createLoggerWithTraceId, log } from "../component/logger.js";
-import { ClientContext } from "./client-context.js";
 import { config } from "../config/server-config.js";
+import { ClientContext } from "./client-context.js";
+import { SessionManager } from "./session-manager.js";
 
 declare global {
   namespace Express {
@@ -52,7 +55,6 @@ declare global {
   }
 }
 
-// 工具注册信息接口
 interface ToolRegistration {
   name: string;
   group: string[];
@@ -80,18 +82,26 @@ interface PromptRegistration {
 }
 
 export class MultiServerMCP extends McpServer {
-  private clientContexts = new Map<string, ClientContext>();
+  private $registeredTools: Map<string, ToolRegistration> = new Map();
+  private $registeredResources: Map<string, ResourceRegistration> = new Map();
+  private $registeredPrompts: Map<string, PromptRegistration> = new Map();
 
-  private serverMap = new Map<string, McpServer>();
-
-  private registeredTools: Map<string, ToolRegistration> = new Map();
-  private registeredResources: Map<string, ResourceRegistration> = new Map();
-  private registeredPrompts: Map<string, PromptRegistration> = new Map();
-
-  private app: express.Application | null = null;
-  private serverInstance: ReturnType<express.Application["listen"]> | null =
+  private _app: express.Application | null = null;
+  private _serverInstance: ReturnType<express.Application["listen"]> | null =
     null;
-  private enableUrlGroups = false;
+  private _enableUrlGroups: boolean;
+  private _mainServerInfo: Implementation;
+
+  private _subServerCount: number = 0;
+
+  constructor(
+    serverInfo: Implementation,
+    options?: ServerOptions & { enableUrlGroups?: boolean }
+  ) {
+    super(serverInfo, options);
+    this._enableUrlGroups = options?.enableUrlGroups ?? false;
+    this._mainServerInfo = serverInfo;
+  }
 
   public async start(options?: {
     transportType?: "sse";
@@ -100,13 +110,12 @@ export class MultiServerMCP extends McpServer {
       messagesEndpoint?: `/${string}`;
       port?: number | string;
     };
-    enableUrlGroups?: boolean;
   }) {
     const transportType = options?.transportType || "sse";
     const sseEndpoint = options?.sse?.endpoint || config.mcp.sseEndpoint;
-    const messagesEndpoint = options?.sse?.messagesEndpoint || config.mcp.messagesEndpoint;
+    const messagesEndpoint =
+      options?.sse?.messagesEndpoint || config.mcp.messagesEndpoint;
     const ssePort = options?.sse?.port || config.mcp.serverPort;
-    this.enableUrlGroups = options?.enableUrlGroups ?? false;
 
     if (transportType !== "sse") {
       throw new Error(`Unsupported transport type: ${transportType}`);
@@ -114,7 +123,7 @@ export class MultiServerMCP extends McpServer {
 
     // create express
     const app = express();
-    this.app = app;
+    this._app = app;
 
     // use CORS
     app.use(cors());
@@ -137,14 +146,14 @@ export class MultiServerMCP extends McpServer {
     app.get("/health", (req, res) => {
       req.log.debug("health check request");
       res.status(200).json({
-        status: "ok"
+        status: "ok",
       });
     });
 
     // set SSE endpoint
-    app.get(`${sseEndpoint}/:key(*)`, async (req, res) => {
+    app.get([`${sseEndpoint}`, `${sseEndpoint}/:key(*)`], async (req, res) => {
       try {
-        // get key from route params
+        // get key from route params, if not present use empty string
         const key = req.params.key || "";
         req.log.info(
           `[sse] receive sse connection request, key: ${key || "empty"}`
@@ -176,14 +185,14 @@ export class MultiServerMCP extends McpServer {
 
     // start server
     const PORT = ssePort;
-    this.serverInstance = app.listen(PORT, () => {
+    this._serverInstance = app.listen(PORT, () => {
       log.info(`[server]mcp server started, listening on port ${PORT}`);
       log.info(`[server]sse endpoint: ${sseEndpoint}`);
       log.info(`[server]message endpoint: ${messagesEndpoint}`);
 
       // output registered tools info
       setTimeout(() => {
-        const registeredTools = this.registeredTools;
+        const registeredTools = this.$registeredTools;
         const toolCount = registeredTools.size;
         log.debug(`[server]registered tools count: ${toolCount}`);
         if (toolCount > 0) {
@@ -193,7 +202,6 @@ export class MultiServerMCP extends McpServer {
       }, 1000);
     });
 
-    // 设置全局错误处理
     process.on("uncaughtException", (error) => {
       log.error(`[server]uncaught exception: ${error}`);
     });
@@ -206,8 +214,6 @@ export class MultiServerMCP extends McpServer {
   }
 
   async connectServer(clientContext: ClientContext): Promise<void> {
-    this.clientContexts.set(clientContext.sessionId, clientContext);
-
     const req = clientContext.req;
     // connect to mcp server
     req.log.info(
@@ -217,15 +223,21 @@ export class MultiServerMCP extends McpServer {
     );
 
     req.log.debug(`[mcp]connect to mcp server: ${clientContext.sessionId}`);
-    this.clientContexts.set(clientContext.sessionId, clientContext);
 
     // create mcp server
     const server = new McpServer({
-      name: 'multi server',
-      version: '1.0.0',
+      name: `${this._mainServerInfo.name}-${this._subServerCount}`,
+      version: this._mainServerInfo.version,
     });
-    this.serverMap.set(clientContext.sessionId, server);
+
+    clientContext.server = server;
+    // register client
+    SessionManager.getInstance().registerClientContext(clientContext);
+
+    // set custom request handlers
     this.setCustomToolRequestHandlers(server);
+    this.setCustomResourceRequestHandlers(server);
+    this.setCustomPromptRequestHandlers(server);
 
     await server.connect(clientContext.transport);
 
@@ -248,7 +260,10 @@ export class MultiServerMCP extends McpServer {
         `[sse]prepare to clean connection: ${clientContext.sessionId}`
       );
       clearInterval(heartbeatInterval);
-      this.clientContexts.delete(clientContext.sessionId);
+
+      // remove from session
+      SessionManager.getInstance().removeSession(clientContext.sessionId);
+
       req.log.debug(`[sse]client ${clientContext.sessionId} disconnected`);
     });
 
@@ -276,7 +291,8 @@ export class MultiServerMCP extends McpServer {
     req.log.info(`[message]receive message request, sessionId: ${sessionId}`);
 
     // handle message based on transport type
-    const clientContext = this.clientContexts.get(sessionId);
+    const clientContext =
+      SessionManager.getInstance().getClientContext(sessionId);
     if (!clientContext) {
       req.log.error(`[message]client ${sessionId} not found`);
       res.status(404).json({ error: "client not found" });
@@ -287,11 +303,9 @@ export class MultiServerMCP extends McpServer {
 
   /**
    * parse tool group from tool name
-   * @param name tool name, e.g. jk.ftd.buildProject
-   * @returns group array, e.g. ['jk', 'ftd']
    */
   private parseToolGroup(name: string): string[] {
-    if (!this.enableUrlGroups) {
+    if (!this._enableUrlGroups) {
       return [];
     }
 
@@ -299,20 +313,16 @@ export class MultiServerMCP extends McpServer {
       return [];
     }
     const parts = name.split("/");
-    // 最后一个是工具名，之前的都是分组
     const groups = parts.length > 1 ? parts.slice(0, -1) : [];
     log.debug(`[mcp]parse tool group: "${name}" => ${JSON.stringify(groups)}`);
     return groups;
   }
 
   /**
-   * 检查key是否有权限访问工具
-   * @param toolGroups 工具的分组
-   * @param keyGroups 当前会话key的分组
-   * @returns 是否有权限访问
+   * check permission
    */
   private hasPermission(toolGroups: string[], keyGroups?: string[]): boolean {
-    if (!this.enableUrlGroups) {
+    if (!this._enableUrlGroups) {
       return true;
     }
 
@@ -322,20 +332,16 @@ export class MultiServerMCP extends McpServer {
       )}, key groups: ${JSON.stringify(keyGroups)}`
     );
 
-    // 没有key分组信息，表示没有限制
     if (!keyGroups || keyGroups.length === 0) {
       log.debug(`[mcp]check permission - no key groups, allow access`);
       return true;
     }
 
-    // 如果工具没有分组，允许所有人访问
     if (!toolGroups || toolGroups.length === 0) {
       log.debug(`[mcp]check permission - tool has no groups, allow access`);
       return true;
     }
 
-    // 检查key分组是否是工具分组的前缀
-    // 例如：key='jk.ftd'可以访问'jk.ftd.buildProject'
     if (toolGroups.length < keyGroups.length) {
       log.debug(
         `[mcp]check permission - tool groups level(${toolGroups.length}) is less than key groups level(${keyGroups.length}), reject access`
@@ -356,7 +362,6 @@ export class MultiServerMCP extends McpServer {
     return true;
   }
 
-  // 重写工具方法
   tool(name: string, cb: ToolCallback): void;
   tool(name: string, description: string, cb: ToolCallback): void;
   tool<Args extends ZodRawShape>(
@@ -371,12 +376,10 @@ export class MultiServerMCP extends McpServer {
     cb: ToolCallback<Args>
   ): void;
   tool(name: string, ...rest: unknown[]): void {
-    // 解析工具分组
     const group = this.parseToolGroup(name);
     log.info(`[mcp]register tool: ${name}, group: ${JSON.stringify(group)}`);
     name = name.replace("/", "_");
 
-    // 保留原始参数以供记录
     const args = [...rest];
 
     let description: string | undefined;
@@ -391,7 +394,7 @@ export class MultiServerMCP extends McpServer {
 
     const cb = args[0] as ToolCallback<ZodRawShape | undefined>;
 
-    this.registeredTools.set(name, {
+    this.$registeredTools.set(name, {
       name,
       group,
       description,
@@ -401,11 +404,10 @@ export class MultiServerMCP extends McpServer {
     });
 
     log.info(
-      `[mcp]tool registered: ${name}, total tools: ${this.registeredTools.size}`
+      `[mcp]tool registered: ${name}, total tools: ${this.$registeredTools.size}`
     );
   }
 
-  // 重写resource方法
   resource(name: string, uri: string, readCallback: ReadResourceCallback): void;
   resource(
     name: string,
@@ -466,7 +468,7 @@ export class MultiServerMCP extends McpServer {
       return;
     }
 
-    this.registeredResources.set(name, {
+    this.$registeredResources.set(name, {
       name,
       group,
       uri,
@@ -477,7 +479,7 @@ export class MultiServerMCP extends McpServer {
     });
 
     log.info(
-      `[mcp]resource registered: ${name}, total resources: ${this.registeredResources.size}`
+      `[mcp]resource registered: ${name}, total resources: ${this.$registeredResources.size}`
     );
   }
 
@@ -503,12 +505,10 @@ export class MultiServerMCP extends McpServer {
     cb: PromptCallback<Args>
   ): void;
   prompt(name: string, ...rest: unknown[]): void {
-    // 解析提示词分组
     const group = this.parseToolGroup(name);
     log.info(`[mcp]register prompt: ${name}, group: ${JSON.stringify(group)}`);
     name = name.replace("/", "_");
 
-    // 保留原始参数以供记录
     const args = [...rest];
 
     let description: string | undefined;
@@ -519,7 +519,6 @@ export class MultiServerMCP extends McpServer {
     let argsSchema: AnyZodObject | undefined;
     if (args.length > 1) {
       const schemaArg = args.shift();
-      // 检查参数是否为 Zod Schema 对象
       if (
         typeof schemaArg === "object" &&
         schemaArg !== null &&
@@ -530,7 +529,6 @@ export class MultiServerMCP extends McpServer {
         log.warn(
           `[mcp]invalid argsSchema for prompt ${name}, expected Zod schema object, got ${typeof schemaArg}`
         );
-        // 如果参数不是预期的 Zod Schema，将描述设置回正确的值
         if (description === undefined && typeof schemaArg === "string") {
           description = schemaArg;
         }
@@ -539,7 +537,7 @@ export class MultiServerMCP extends McpServer {
 
     const cb = args[0] as PromptCallback<any>;
 
-    this.registeredPrompts.set(name, {
+    this.$registeredPrompts.set(name, {
       name,
       group,
       description,
@@ -548,7 +546,7 @@ export class MultiServerMCP extends McpServer {
     });
 
     log.info(
-      `[mcp]prompt registered: ${name}, total prompts: ${this.registeredPrompts.size}`
+      `[mcp]prompt registered: ${name}, total prompts: ${this.$registeredPrompts.size}`
     );
   }
 
@@ -572,12 +570,11 @@ export class MultiServerMCP extends McpServer {
         log.info(
           `[mcp]ListTools processor received request, sessionId: ${sessionId}`
         );
-        const clientContext = this.clientContexts.get(
+        const clientContext = SessionManager.getInstance().getClientContext(
           sessionId
         ) as ClientContext;
 
-        // 根据权限过滤工具
-        const tools = Array.from(this.registeredTools.entries())
+        const tools = Array.from(this.$registeredTools.entries())
           .filter(([name, tool]) => {
             const urlGroups = clientContext.urlGroups;
             const hasAccess = this.hasPermission(tool.group, urlGroups);
@@ -603,7 +600,7 @@ export class MultiServerMCP extends McpServer {
           }));
 
         log.info(
-          `[mcp]return ${tools.length} tools based on key permission, total ${this.registeredTools.size} tools`
+          `[mcp]return ${tools.length} tools based on key permission, total ${this.$registeredTools.size} tools`
         );
         if (tools.length > 0) {
           log.debug(
@@ -620,7 +617,7 @@ export class MultiServerMCP extends McpServer {
     server.server.setRequestHandler(
       CallToolRequestSchema,
       async (request, extra): Promise<CallToolResult> => {
-        const tool = this.registeredTools.get(request.params.name);
+        const tool = this.$registeredTools.get(request.params.name);
         if (!tool) {
           throw new McpError(
             ErrorCode.InvalidParams,
@@ -639,7 +636,14 @@ export class MultiServerMCP extends McpServer {
             );
           }
 
-          const args = parseResult.data;
+          const sessionId = extra.sessionId as string;
+          const clientContext = SessionManager.getInstance().getClientContext(
+            sessionId
+          ) as ClientContext;
+
+          const args = parseResult.data || {};
+          args.reqQuery = clientContext.reqQuery;
+
           const cb = tool.callback as ToolCallback<ZodRawShape>;
           try {
             return await Promise.resolve(cb(args, extra));
@@ -672,9 +676,6 @@ export class MultiServerMCP extends McpServer {
         }
       }
     );
-
-    this.setCustomResourceRequestHandlers(server);
-    this.setCustomPromptRequestHandlers(server);
   }
 
   private setCustomResourceRequestHandlers(server: McpServer) {
@@ -687,16 +688,15 @@ export class MultiServerMCP extends McpServer {
           )}, extra: ${JSON.stringify(extra)}`
         );
         const sessionId = extra.sessionId as string;
-        const clientContext = this.clientContexts.get(
+        const clientContext = SessionManager.getInstance().getClientContext(
           sessionId
         ) as ClientContext;
 
-        // 根据权限过滤资源
-        const resources = Array.from(this.registeredResources.entries())
+        const resources = Array.from(this.$registeredResources.entries())
           .filter(([name, resource]) => {
             const urlGroups = clientContext.urlGroups;
             const hasAccess = this.hasPermission(resource.group, urlGroups);
-            log.info(
+            log.debug(
               `[mcp]resource '${name}' access permission: ${
                 hasAccess ? "allow" : "reject"
               }
@@ -729,7 +729,7 @@ export class MultiServerMCP extends McpServer {
           });
 
         log.info(
-          `[mcp]return ${resources.length} resources based on key permission, total ${this.registeredResources.size} resources`
+          `[mcp]return ${resources.length} resources based on key permission, total ${this.$registeredResources.size} resources`
         );
         if (resources.length > 0) {
           log.debug(
@@ -746,9 +746,8 @@ export class MultiServerMCP extends McpServer {
     server.server.setRequestHandler(
       ReadResourceRequestSchema,
       async (request, extra): Promise<ReadResourceResult> => {
-        // 添加类型断言，确保 name 是字符串
         const resourceName = request.params.name as string;
-        const resourceReg = this.registeredResources.get(resourceName);
+        const resourceReg = this.$registeredResources.get(resourceName);
         if (!resourceReg) {
           throw new McpError(
             ErrorCode.InvalidParams,
@@ -757,7 +756,7 @@ export class MultiServerMCP extends McpServer {
         }
 
         const sessionId = extra.sessionId as string;
-        const clientContext = this.clientContexts.get(
+        const clientContext = SessionManager.getInstance().getClientContext(
           sessionId
         ) as ClientContext;
         const hasAccess = this.hasPermission(
@@ -817,12 +816,11 @@ export class MultiServerMCP extends McpServer {
           )}, extra: ${JSON.stringify(extra)}`
         );
         const sessionId = extra.sessionId as string;
-        const clientContext = this.clientContexts.get(
+        const clientContext = SessionManager.getInstance().getClientContext(
           sessionId
         ) as ClientContext;
 
-        // 根据权限过滤提示词
-        const prompts = Array.from(this.registeredPrompts.entries())
+        const prompts = Array.from(this.$registeredPrompts.entries())
           .filter(([name, prompt]) => {
             const urlGroups = clientContext.urlGroups;
             const hasAccess = this.hasPermission(prompt.group, urlGroups);
@@ -847,7 +845,7 @@ export class MultiServerMCP extends McpServer {
           );
 
         log.info(
-          `[mcp]return ${prompts.length} prompts based on key permission, total ${this.registeredPrompts.size} prompts`
+          `[mcp]return ${prompts.length} prompts based on key permission, total ${this.$registeredPrompts.size} prompts`
         );
         if (prompts.length > 0) {
           log.debug(
@@ -864,7 +862,7 @@ export class MultiServerMCP extends McpServer {
     server.server.setRequestHandler(
       GetPromptRequestSchema,
       async (request, extra): Promise<GetPromptResult> => {
-        const promptReg = this.registeredPrompts.get(request.params.name);
+        const promptReg = this.$registeredPrompts.get(request.params.name);
         if (!promptReg) {
           throw new McpError(
             ErrorCode.InvalidParams,
@@ -873,7 +871,7 @@ export class MultiServerMCP extends McpServer {
         }
 
         const sessionId = extra.sessionId as string;
-        const clientContext = this.clientContexts.get(
+        const clientContext = SessionManager.getInstance().getClientContext(
           sessionId
         ) as ClientContext;
         const hasAccess = this.hasPermission(
@@ -900,7 +898,7 @@ export class MultiServerMCP extends McpServer {
             }
             const args = parseResult.data;
             const cb = promptReg.callback as PromptCallback<any>; // Cast needed due to generic nature
-            // @ts-ignore - 确保类型匹配
+            // @ts-ignore -
             return await Promise.resolve(cb(args, extra));
           } else {
             const cb = promptReg.callback as PromptCallback<undefined>; // Cast needed

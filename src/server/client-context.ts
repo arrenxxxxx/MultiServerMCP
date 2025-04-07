@@ -1,6 +1,7 @@
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { Request, Response } from "express";
 import { log } from "../component/logger.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export class ClientContext {
   private _transport: SSEServerTransport;
@@ -8,7 +9,8 @@ export class ClientContext {
   private _urlGroups: string[];
   private _req: Request;
   private _res: Response;
-  private _metadata: Map<string, any> = new Map();
+  private _reqQuery: Record<string, any>;
+  private _server: McpServer | null = null;
 
   constructor(
     transport: SSEServerTransport,
@@ -32,6 +34,8 @@ export class ClientContext {
         this._urlGroups
       )}`
     );
+
+    this._reqQuery = this._req.query;
   }
 
   get uri(): string {
@@ -58,16 +62,20 @@ export class ClientContext {
     return this._res;
   }
 
-  setMetadata(key: string, value: any): void {
-    this._metadata.set(key, value);
+  get reqQuery(): Record<string, any> {
+    return this._reqQuery;
   }
 
-  getMetadata<T>(key: string): T | undefined {
-    return this._metadata.get(key) as T | undefined;
+  set server(server: McpServer) {
+    this._server = server;
+  }
+
+  get server(): McpServer | null {
+    return this._server;
   }
 
   /**
-   * 清空URL分组信息
+   * clear url groups
    */
   clearUrlGroups(): void {
     this._urlGroups = [];

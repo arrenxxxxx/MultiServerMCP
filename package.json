@@ -1,14 +1,15 @@
 {
     "name": "multi-server-mcp",
-    "version": "1.0.1",
-    "description": "支持多连接的MCP服务器框架，基于SSE实现长连接通信。为AI助手提供上下文和功能扩展能力。",
+    "version": "1.0.2",
+    "description": "support multi connection mcp server, based on sse.",
     "type": "module",
     "main": "dist/src/index.js",
     "types": "dist/src/index.d.ts",
     "files": [
         "dist",
         "README.md",
-        "LICENSE"
+        "LICENSE",
+        "README_zh.md"
     ],
     "scripts": {
         "build": "tsc",

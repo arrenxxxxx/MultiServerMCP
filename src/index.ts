@@ -5,6 +5,11 @@ export { MultiServerMCP } from "./server/mcp.js";
 
 // 导出相关类型
 export { ClientContext } from "./server/client-context.js";
+export {
+  SessionManager,
+  getClientContextBySessionId,
+  getSseReqQuery,
+} from "./server/session-manager.js";
 
 // 导出配置
 export { config } from "./config/server-config.js";

@@ -134,13 +134,5 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
-/.idea/libraries/test_package.xml
-/.idea/libraries/ts_commonjs_default_export.xml
-/.idea/.gitignore
-/.idea/encodings.xml
-/.idea/misc.xml
-/.idea/modules.xml
-/.idea/MultiServerMCP.iml
-/.idea/vcs.xml
-/.cursor/rules/langgpt-helper.mdc
-/.cursor/rules/mcp-expert.mdc
+.idea/
+.cursor/

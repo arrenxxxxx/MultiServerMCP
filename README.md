@@ -18,6 +18,8 @@ MultiServerMCP is designed to provide a robust server framework that supports mu
 - Built-in heartbeat mechanism to ensure connection stability
 - Simplified tool registration process
 - Full compatibility with MCP protocol
+- Global session management with `SessionManager` to access client context anywhere
+- Convenient global functions to retrieve request parameters and client context by sessionId
 
 ## 📦 Installation
 
@@ -30,6 +32,64 @@ pnpm add multi-server-mcp
 ```
 
 ## 🚀 Quick Start
+
+### Complete Server Example
+
+```typescript
+import { z } from "zod";
+import { MultiServerMCP } from "multi-server-mcp";
+import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { getSseReqQuery } from "multi-server-mcp";
+
+// Create MCP server with URL grouping enabled
+const server = new MultiServerMCP(
+  {
+    name: "multi server",
+    version: "1.0.0",
+  },
+  {
+    enableUrlGroups: true,
+  }
+);
+
+// Register a calculator tool that uses request parameters
+server.tool("calc/add", { a: z.number(), b: z.number() }, async ({ a, b }, extra) => {
+  console.log(extra);
+  // Get query parameters from the SSE connection
+  const reqQuery = getSseReqQuery(extra.sessionId as string);
+  console.log(reqQuery);
+  return {
+    content: [{ type: "text", text: String(a + b) }],
+  };
+});
+
+// Register a resource template
+server.resource(
+  "greeting",
+  new ResourceTemplate("greeting://{name}", { list: undefined }),
+  async (uri, { name }) => ({
+    contents: [
+      {
+        uri: uri.href,
+        text: `Hello, ${name}!`,
+      },
+    ],
+  })
+);
+
+// Start the server
+server
+  .start({
+    transportType: "sse",
+  })
+  .then(() => {
+    console.log(`Server started`);
+  })
+  .catch((error) => {
+    console.error(`Server start failed: ${error}`);
+    process.exit(1);
+  });
+```
 
 ### Basic Usage
 
@@ -77,6 +137,38 @@ server.start({
 });
 ```
 
+### Accessing Client Context Globally
+
+```typescript
+import { getSseReqQuery, getClientContextBySessionId } from 'multi-server-mcp';
+import { z } from "zod";
+
+// Register a tool that uses request parameters
+server.tool("calc/add", { a: z.number(), b: z.number() }, async ({ a, b }, extra) => {
+  // Get request parameters from the SSE connection
+  const reqQuery = getSseReqQuery(extra.sessionId as string);
+  console.log('Query parameters:', reqQuery);
+  
+  return {
+    content: [{ type: "text", text: String(a + b) }],
+  };
+});
+
+// In any part of your code, you can also access client's request parameters
+function myFunction(sessionId: string) {
+  // Get query parameters from the SSE connection request
+  const reqQuery = getSseReqQuery(sessionId);
+  console.log('Client query parameters:', reqQuery);
+  
+  // Get the full client context if needed
+  const clientContext = getClientContextBySessionId(sessionId);
+  if (clientContext) {
+    console.log('Client URL groups:', clientContext.urlGroups);
+    // Access any other client context properties
+  }
+}
+```
+
 ## 🔧 Development Guide
 
 Currently only SSE mode is supported.
@@ -86,6 +178,20 @@ Currently only SSE mode is supported.
 - Regular tools: `server.tool()`
 - Resource tools: `server.resource()`
 - Prompt tools: `server.prompt()`
+
+### Session Management
+
+The `SessionManager` provides a singleton instance to manage client sessions:
+
+- `SessionManager.getInstance()`: Get the singleton instance
+- `SessionManager.getInstance().getClientContext(sessionId)`: Get client context by sessionId
+- `SessionManager.getInstance().getReqQuery(sessionId)`: Get request query parameters by sessionId
+- `SessionManager.getInstance().getSessionCount()`: Get the count of active sessions
+
+For convenience, the following global functions are provided:
+
+- `getSseReqQuery(sessionId)`: Get request query parameters by sessionId
+- `getClientContextBySessionId(sessionId)`: Get client context by sessionId
 
 ## 🤝 Contributing
 
